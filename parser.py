@@ -100,6 +100,63 @@ def _parseBHTR968(data):
 		output['forecast']  = 'unknown'
 		
 	return output
+	
+	def _parseBTHGN129(data):
+	"""
+	Parse the data section of a BTHGN129 outdoor temperature/humidity/pressure
+	sensor packet and return a dictionary of the values recovered.
+	"""
+	
+	output = {'temperature': -99, 'humidity': -99, 'pressure': -99, 
+			  'comfortLevel': 'unknown', 'forecast': 'unknown'}
+			  
+	# Indoor temperature in C
+	temp = nibbles2value(data[0:12])
+	temp = 10*temp[2] + temp[1] + 0.1*temp[0]
+	if sum(data[12:16]) > 0:
+		temp *= -1
+	output['temperature'] = temp
+	
+	# Indoor relative humidity as a percentage
+	humi = nibbles2value(data[16:24])
+	output['humidity'] = 10*humi[1]+humi[0]
+		
+	# Indoor "comfort level"
+	comf = nibbles2value(data[24:28])[0]
+	if comf == 0:
+		output['comfortLevel'] = 'normal'
+	elif comf == 4:
+		output['comfortLevel'] = 'comfortable'
+	elif comf == 8:
+		output['comfortLevel'] = 'dry'
+	elif comf == 0xC:
+		output['comfortLevel'] = 'wet'
+	else:
+		output['comfortLevel'] = 'unknown'
+		
+	# Barometric pressure in mbar
+	baro = nibbles2value(data[28:36])
+	baro = (baro[1] << 4) | (baro[0])
+	if baro >= 128:
+		baro -= 256
+	#output['pressure'] = baro + 856
+	output['pressure'] = baro + 1071
+		
+	# Pressure-based weather forecast
+	fore = nibbles2value(data[40:44])[0]
+	if fore == 2:
+		output['forecast'] = 'cloudy'
+	elif fore == 3:
+		output['forecast']  = 'rainy'
+	elif fore == 6:
+		output['forecast']  = 'partly cloudy'
+	elif fore == 0xC:
+		output['forecast']  = 'sunny'
+	else:
+		output['forecast']  = 'unknown'
+		
+	return output
+
 
 def _parseRGR968(data):
 	"""
@@ -212,6 +269,7 @@ def parsePacketv21(packet, wxData=None, verbose=False):
 	  * 1D20 - THGR268 - Outdoor temperature/humidity
 	  * 1D30 - THGR968 - Outdoor temperature/humidity
 	  * EC70 - UVR128  - UV sensor
+	  * 5D53 - BTHGN129  - Outdoor temperature/humidity/pressure
 	"""
 	
 	# Check for a valid preamble
@@ -225,9 +283,12 @@ def parsePacketv21(packet, wxData=None, verbose=False):
 	# Try to figure out which sensor is present so that we can get 
 	# the packet length
 	sensor = ''.join(["%x" % i for i in nibbles2value(packet[20:36])])
-	if sensor == '5d60':
-		nm = 'BHTR968'
+	if sensor == '5d53':
+		nm = 'BTHGN129'
 		ds = 96
+	elif sensor == '5d60':
+		nm = 'BTHGN129'
+		ds = 96	
 	elif sensor == '2d10':
 		nm = 'RGR968'
 		ds = 84
@@ -275,7 +336,9 @@ def parsePacketv21(packet, wxData=None, verbose=False):
 	# Parse
 	data = packet[52:ds]
 	channel = nibbles2value(packet[36:40])[0]
-	if nm == 'BHTR968':
+	ifnm == 'BTHGN129':
+		output = _parseBTHGN129(data)
+	elif nm == 'BHTR968':
 		output = _parseBHTR968(data)
 	elif nm == 'RGR968':
 		output = _parseRGR968(data)
@@ -343,13 +406,13 @@ def parseBitStream(bits, elevation=0.0, inputDataDict=None, verbose=False):
 			### Data reorganization and computed quantities
 			if valid:
 				#### Dew point - indoor and output
-				if sensorName in ('BHTR968', 'THGR268', 'THGR968'):
+				if sensorName in ('BHTR968', 'THGR268', 'THGR968','BTHGN129'):
 					sensorData['dewpoint'] = computeDewPoint(sensorData['temperature'], sensorData['humidity'])
 				#### Sea level corrected barometric pressure
-				if sensorName in ('BHTR968',) and elevation != 0.0:
+				if sensorName in ('BHTR968','BTHGN129') and elevation != 0.0:
 					sensorData['pressure'] = computeSeaLevelPressure(sensorData['pressure'], elevation)
 				#### Disentangle the indoor temperatures from the outdoor temperatures
-				if sensorName == 'BHTR968':
+				if sensorName == 'BHTR968','BTHGN129':
 					for key in ('temperature', 'humidity', 'dewpoint'):
 						newKey = 'indoor%s' % key.capitalize()
 						sensorData[newKey] = sensorData[key]
